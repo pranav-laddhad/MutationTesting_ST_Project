@@ -62,6 +62,7 @@ int authenticate(int sock, int role) {
     return 1;
 }
 
+
 //USER MENU
 void user_menu(int sock)
 {
