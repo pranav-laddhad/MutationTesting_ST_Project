@@ -7,3 +7,5 @@ Steps to Run:
 2. Run the server executable (./server) on a terminal.
 3. Run the client executable (./client) on another terminal.
 4. Follow the prompts to log in as a user or admin and perform library management actions.
+
+
