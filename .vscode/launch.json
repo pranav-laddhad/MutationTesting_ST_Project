@@ -1,0 +1,13 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "C/C++ Runner: Debug Session",
+      "type": "lldb",
+      "request": "launch",
+      "args": [],
+      "cwd": "/Users/prana/Desktop/SEM7/ST/project/LibraryManager",
+      "program": "/Users/prana/Desktop/SEM7/ST/project/LibraryManager/build/Debug/outDebug"
+    }
+  ]
+}

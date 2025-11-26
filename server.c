@@ -50,7 +50,7 @@ void add_book(int client_socket);
 void delete_book(int client_socket);
 void modify_book(int client_socket);
 void search_book(int client_socket);
-void number_of_rented_books(int client_socket, int ptr, int member_id);
+void number_of_rented_books(/*int client_socket,*/ int ptr, int member_id);
 
 // Function to authenticate
 int authenticate(int client_socket)
@@ -124,12 +124,13 @@ int authenticate(int client_socket)
             return 0;
         }
     }
+    return 0;
 }
 
 void *handle_client(void *client_socket)
 {
     int sock = *(int *)client_socket;
-    char buffer[BUFFER_SIZE];
+    // char buffer[BUFFER_SIZE];
     int role;
     int choice;
     while (1)
@@ -218,7 +219,12 @@ int get_next_id(const char *filename)
     }
 
     fclose(file);
+
+    // Original Code (must be changed to create the mutant)
     return id + 1;
+    
+    // MUTANT CODE: Change '+' to '-'
+    // return id - 1;
 }
 
 void register_member(int client_socket, int id, int rent_id)
@@ -259,7 +265,9 @@ void register_member(int client_socket, int id, int rent_id)
 //ADD BOOK 
 void add_book(int client_socket)
 {
-    pthread_mutex_lock(&file_mutex);
+    pthread_mutex_lock(&file_mutex); // Lock the mutex before file operations) (ORIGINAL CODE)
+
+    // Lock Deletion Mutant: Commenting out the mutex lock (MUTANT CODE))
 
     int fd = open("books.txt", O_WRONLY | O_APPEND | O_CREAT, 0644);
     if (fd < 0)
@@ -384,8 +392,8 @@ void modify_book(int client_socket)
         pthread_mutex_unlock(&file_mutex);
         return;
     }
-    char title[50];
-    char author[50];
+    // char title[50];
+    // char author[50];
     int book_id;
     char buffer[BUFFER_SIZE];
 
@@ -503,7 +511,7 @@ void search_book(int client_socket)
 }
 
 //Rented Books
-void number_of_rented_books(int client_socket, int ptr, int member_id)
+void number_of_rented_books(/*int client_socket,*/ int ptr, int member_id)
 {
     pthread_mutex_lock(&file_mutex);
 
@@ -693,7 +701,358 @@ void return_book(int client_socket)
 }
 
 
-int main()
+
+
+
+
+
+// Add this wrapper function to server.c (e.g., just before main)
+// Purpose: Enables unit testing of file deletion logic by bypassing socket reads.
+void delete_book_wrapper(int book_id)
+{
+    // Start critical section - Acquire pthread mutex lock (Lock 1)
+    pthread_mutex_lock(&file_mutex);
+
+    int fd = open("books.txt", O_RDWR);
+    if (fd < 0)
+    {
+        perror("Error opening file");
+        // Must unlock mutex before exiting on failure
+        pthread_mutex_unlock(&file_mutex);
+        return;
+    }
+
+    // Acquire advisory file lock (Lock 2) - Guarantees exclusive access to the file resource
+    if (flock(fd, LOCK_EX) < 0)
+    {
+        perror("Error locking file");
+        close(fd); // Close descriptor
+        pthread_mutex_unlock(&file_mutex); // Unlock mutex
+        return;
+    }
+
+    // Associate file descriptor with a C stream for fgets/fprintf
+    FILE *file = fdopen(fd, "r+");
+    // Ensure file stream was created successfully before proceeding
+    if (file == NULL) {
+        perror("Error creating file stream");
+        flock(fd, LOCK_UN); // Release file lock if fdopen fails
+        close(fd);
+        pthread_mutex_unlock(&file_mutex);
+        return;
+    }
+
+    char temp_filename[] = "books_temp.txt";
+    FILE *temp_file = fopen(temp_filename, "w");
+    // Handle error if temp file cannot be created
+    if (temp_file == NULL) {
+        perror("Error creating temporary file");
+        fclose(file);
+        flock(fd, LOCK_UN);
+        close(fd);
+        pthread_mutex_unlock(&file_mutex);
+        return;
+    }
+
+    int found = 0;
+    char buffer[BUFFER_SIZE]; // Buffer for reading file lines
+
+    // Read every line from books.txt and write non-matching lines to temp file
+    while (fgets(buffer, BUFFER_SIZE, file))
+    {
+        Book book;
+        // NOTE: Use %49s to prevent buffer overflow in sscanf for title/author
+        sscanf(buffer, "%d %49s %49s %d", &book.id, book.title, book.author, &book.is_rented);
+
+        if (book.id == book_id)
+        {
+            found = 1; // Mark as found, but skip writing this line
+            continue;
+        }
+
+        fprintf(temp_file, "%d %s %s %d\n", book.id, book.title, book.author, book.is_rented);
+    }
+
+    // Close both file streams before attempting rename/remove
+    fclose(file);
+    fclose(temp_file);
+
+    if (found)
+    {
+        // Successful deletion: Replace original file with temporary file
+        rename(temp_filename, "books.txt");
+    }
+    else
+    {
+        // Book not found: Delete the unnecessary temporary file
+        remove(temp_filename);
+        
+        // This is the VRR MUTATION TARGET: If activated, remove("books.txt") would be executed here.
+        // remove("books.txt"); 
+    }
+
+    // Final cleanup: Release locks and resources in reverse order of acquisition
+    flock(fd, LOCK_UN);
+    close(fd);
+    pthread_mutex_unlock(&file_mutex);
+}
+
+
+
+// TEST WRAPPER: Modified to take ID as argument instead of reading from socket.
+// Logic copied from the original rent_book function.
+void rent_book_wrapper(int book_id)
+{
+    pthread_mutex_lock(&file_mutex);
+
+    int fd = open("books.txt", O_RDWR);
+    if (fd < 0)
+    {
+        perror("Error opening file");
+        pthread_mutex_unlock(&file_mutex);
+        return;
+    }
+
+    if (flock(fd, LOCK_EX) < 0)
+    {
+        perror("Error locking file");
+        close(fd);
+        pthread_mutex_unlock(&file_mutex);
+        return;
+    }
+
+    FILE *file = fdopen(fd, "r+");
+    char temp_filename[] = "books_temp_rent.txt"; // Use a unique temp file name
+    FILE *temp_file = fopen(temp_filename, "w");
+
+    int found = 0;
+    char buffer[BUFFER_SIZE];
+
+    while (fgets(buffer, BUFFER_SIZE, file))
+    {
+        Book book;
+        sscanf(buffer, "%d %49s %49s %d", &book.id, book.title, book.author, &book.is_rented);
+
+        if (book.id == book_id && book.is_rented == 0) // <--- THIS IS THE COR TARGET LINE (ORGINAL CODE)
+
+        // MUTANT CODE: Change '&&' to '||'
+        // if (book.id == book_id || book.is_rented == 0)
+        {
+            book.is_rented = 1;
+            found = 1;
+        }
+
+        fprintf(temp_file, "%d %s %s %d\n", book.id, book.title, book.author, book.is_rented);
+    }
+
+    fclose(file);
+    fclose(temp_file);
+
+    if (found)
+    {
+        rename(temp_filename, "books.txt");
+    }
+    else
+    {
+        remove(temp_filename);
+    }
+
+    flock(fd, LOCK_UN);
+    close(fd);
+    pthread_mutex_unlock(&file_mutex);
+
+}
+
+
+// server.c: Add this wrapper function
+
+void return_book_wrapper(int book_id)
+{
+    pthread_mutex_lock(&file_mutex);
+
+    int fd = open("books.txt", O_RDWR);
+    if (fd < 0)
+    {
+        perror("Error opening file");
+        pthread_mutex_unlock(&file_mutex);
+        return;
+    }
+
+    if (flock(fd, LOCK_EX) < 0)
+    {
+        perror("Error locking file");
+        close(fd);
+        pthread_mutex_unlock(&file_mutex);
+        return;
+    }
+
+    // No socket read needed for book_id
+
+    FILE *file = fdopen(fd, "r+");
+    char temp_filename[] = "books_temp_return.txt"; // Unique temp file
+    FILE *temp_file = fopen(temp_filename, "w");
+
+    int found = 0;
+    char buffer[BUFFER_SIZE];
+
+    while (fgets(buffer, BUFFER_SIZE, file))
+    {
+        Book book;
+        sscanf(buffer, "%d %49s %49s %d", &book.id, book.title, book.author, &book.is_rented);
+
+        if (book.id == book_id && book.is_rented == 1) // <--- ROR TARGET LINE (ORIGINAL CODE)
+
+        // MUTANT CODE: Change '== 1' to '!= 1'
+        // if (book.id == book_id && book.is_rented != 1)
+        {
+            book.is_rented = 0; // Set to unrented
+            found = 1;
+        }
+        // {
+        //     book.is_rented = 0; // Set to unrented
+        //     found = 1;
+        // }
+
+        fprintf(temp_file, "%d %s %s %d\n", book.id, book.title, book.author, book.is_rented);
+    }
+
+    fclose(file);
+    fclose(temp_file);
+
+    if (found)
+    {
+        rename(temp_filename, "books.txt");
+    }
+    else
+    {
+        remove(temp_filename);
+    }
+
+    flock(fd, LOCK_UN);
+    close(fd);
+    pthread_mutex_unlock(&file_mutex);
+}
+
+
+// server.c: Helper function for CUnit testing ROR mutant
+int check_admin_credentials_test(const char *username, const char *password)
+{
+    // ROR TARGET LINE  (ORIGINAL CODE)
+    if (strcmp(username, "admin") == 0 && strcmp(password, "admin") == 0)
+
+    // MUTANT CODE: Change '== 0' to '!= 0'
+    // if (strcmp(username, "admin") != 0 && strcmp(password, "admin")==0)
+    {
+        return 1; // Success
+    }
+    return 0; // Failure
+}
+
+
+// server.c: Add this wrapper function
+void modify_book_wrapper(int book_id, const char *new_title, const char *new_author)
+{
+    pthread_mutex_lock(&file_mutex);
+
+    int fd = open("books.txt", O_RDWR);
+    // ... (Error checks for fd and flock(LOCK_EX) are the same as delete/rent wrappers)
+    // [Skipping boilerplate for brevity]
+
+    FILE *file = fdopen(fd, "r+");
+    char temp_filename[] = "books_temp_modify.txt";
+    FILE *temp_file = fopen(temp_filename, "w");
+
+    int found = 0;
+    Book new_book;
+    new_book.id = book_id;
+    // Copy new title/author into new_book structure
+    strncpy(new_book.title, new_title, 49);
+    strncpy(new_book.author, new_author, 49);
+
+    char buffer[BUFFER_SIZE];
+    
+    while (fgets(buffer, BUFFER_SIZE, file))
+    {
+        Book book;
+        sscanf(buffer, "%d %49s %49s %d", &book.id, book.title, book.author, &book.is_rented);
+
+        if (book.id == book_id)
+        {
+            // SDL TARGET LINE: This line preserves the status. (ORIGINAL CODE)
+
+            new_book.is_rented = book.is_rented; 
+            
+            // MUTANT CODE: SDL MUTANT APPLIED: DELETED (just comment the above line)
+
+            book = new_book;
+            book.id = book_id;
+            found = 1;
+        }
+
+        fprintf(temp_file, "%d %s %s %d\n", book.id, book.title, book.author, book.is_rented);
+    }
+
+    // ... (File close, rename/remove logic, and unlock/close fd are the same)
+    // [Skipping boilerplate for brevity]
+    flock(fd, LOCK_UN); 
+    close(fd);
+    pthread_mutex_unlock(&file_mutex);
+}
+
+
+// Logic copied from the original add_book function.
+void add_book_wrapper(const char *title, const char *author)
+{
+    pthread_mutex_lock(&file_mutex);
+
+    // INTEGRATION TARGET: O_WRONLY | O_APPEND | O_CREAT, 0644
+    int fd = open("books.txt", O_WRONLY | O_APPEND | O_CREAT, 0644); 
+
+    // int fd = open("books.txt", O_WRONLY | O_APPEND | O_CREAT, 0000); // MUTANT CODE: SCPR Applied
+
+    // MUTANT CODE: System Call Replacement (SCR) - Remove O_CREAT flag.
+    // int fd = open("books.txt", O_WRONLY | O_APPEND, 0644);
+
+
+    if (fd < 0)
+    {
+        perror("Error opening file");
+        pthread_mutex_unlock(&file_mutex);
+        return;
+    }
+
+    if (flock(fd, LOCK_EX) < 0)
+    {
+        perror("Error locking file");
+        close(fd);
+        pthread_mutex_unlock(&file_mutex);
+        return;
+    }
+
+    Book book;
+    book.id = get_next_id("books.txt");
+
+    // Copy data into book structure
+    strncpy(book.title, title, 49);
+    strncpy(book.author, author, 49);
+
+    book.is_rented = 0;
+
+    dprintf(fd, "%d %s %s %d\n", book.id, book.title, book.author, book.is_rented);
+
+    flock(fd, LOCK_UN);
+    close(fd);
+    pthread_mutex_unlock(&file_mutex);
+}
+
+
+
+
+
+// int main()
+
+// Modified line for testing:
+int server_main()
 {
     int server_socket, client_socket;
     struct sockaddr_in server_addr, client_addr;
